@@ -1,7 +1,0 @@
-pip
-certifi
-charset-normalizer
-idna
-urllib3
-requests
-pytelegrambotapi

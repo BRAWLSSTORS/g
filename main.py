@@ -1,5 +1,4 @@
 import pip
-pip.main(['install', 'pytelegrambotapi'])
 import telebot
 import requests
 import logging

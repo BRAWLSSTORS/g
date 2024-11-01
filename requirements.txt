@@ -7,3 +7,4 @@ requests
 pytelegrambotapi
 selenium
 webdriver-manager
+pillow

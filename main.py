@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Токен Telegram бота
-API_TOKEN = 'YOUR_BOT_TOKEN'
+API_TOKEN = '7067233375:AAEVxtJ91HWZfpttqTouMjTzX8JePKE8HkI'
 bot = telebot.TeleBot(API_TOKEN)
 
 def setup_ublock():

@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Замените на ваш API токен
-API_TOKEN = 'YOUR_BOT_TOKEN'
+API_TOKEN = '7067233375:AAEVxtJ91HWZfpttqTouMjTzX8JePKE8HkI'
 bot = telebot.TeleBot(API_TOKEN)
 
 # Функция для проверки, является ли строка кадастровым номером

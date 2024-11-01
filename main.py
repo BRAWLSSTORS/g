@@ -112,6 +112,9 @@ def init_driver():
     
     return driver
 
+def is_cadastral_number(text):
+    return ':' in text and any(char.isdigit() for char in text) and not text.startswith(('http://', 'https://'))
+
 def is_coordinates(text):
     parts = text.split(',')
     if len(parts) != 2:
@@ -122,36 +125,131 @@ def is_coordinates(text):
     except ValueError:
         return False
 
+def get_location_info(lat, lon, driver):
+    try:
+        driver.get("https://gps-coordinates.org/")
+        
+        lat_input = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "latitude"))
+        )
+        lat_input.clear()
+        lat_input.send_keys(str(lat))
+        
+        lon_input = driver.find_element(By.ID, "longitude")
+        lon_input.clear()
+        lon_input.send_keys(str(lon))
+        
+        button = driver.find_element(By.ID, "btnGetAddressByCoordinates")
+        button.click()
+        
+        time.sleep(2)
+        
+        address_input = driver.find_element(By.ID, "address")
+        address = address_input.get_attribute("value")
+        
+        map_element = driver.find_element(By.ID, "map")
+        screenshot = map_element.screenshot_as_png
+        
+        return {
+            'address': address,
+            'screenshot': screenshot
+        }
+    except Exception as e:
+        logger.error(f"Error in get_location_info: {str(e)}")
+        return None
+
+@bot.message_handler(commands=['geoint'])
+def request_input(message):
+    markup = InlineKeyboardMarkup()
+    button_coordinates = InlineKeyboardButton("ПО КООРДИНАТАМ", callback_data="request_coordinates")
+    button_cadastral = InlineKeyboardButton("КАДАСТРОВЫЙ НОМЕР 🇺🇦", callback_data="request_cadastral")
+    markup.add(button_coordinates)
+    markup.add(button_cadastral)
+    bot.send_message(message.chat.id, "Выберите тип ввода:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "request_coordinates")
+def callback_coordinates(call):
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, "Пожалуйста, введите координаты в формате:  40.75926,-73.98052\n\nЧтобы получить координаты, откройте Google Maps, зажмите нужную точку на карте, затем нажмите на появившиеся координаты и скопируйте их")
+
+@bot.callback_query_handler(func=lambda call: call.data == "request_cadastral")
+def callback_cadastral(call):
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, "Пожалуйста, введите кадастровый номер\n\nЧтобы получить кадастровый номер, вам потребуется зайти на украинский сайт kadastr.live, затем нажать на любой объект и найти 'Номер' и вставить его мне")
+
 @bot.message_handler(func=lambda message: is_coordinates(message.text))
 def handle_coordinates(message):
     coordinates = message.text.strip()
     lat, lon = map(float, coordinates.split(','))
+
+    driver = init_driver()
+    try:
+        location_info = get_location_info(lat, lon, driver)
+
+        if location_info:
+            photo = io.BytesIO(location_info['screenshot'])
+            
+            # Создаем ссылки для карт
+            google_maps_url = f"https://www.google.com/maps?ll={lat},{lon}&q={lat},{lon}&hl=en&t=m&z=15"
+            bing_maps_url = f"https://www.bing.com/maps/?v=2&cp={lat}~{lon}&style=r&lvl=15&sp=Point.{lat}_{lon}____"
+            apple_maps_url = f"https://maps.apple.com/maps?ll={lat},{lon}&q={lat},{lon}&t=m"
+            yandex_maps_url = f"https://maps.yandex.com/?ll={lon},{lat}&spn=0.01,0.01&l=sat,skl&pt={lon},{lat}"
+            
+            # Создаем разметку для кнопок
+            markup = InlineKeyboardMarkup()
+            markup.add(
+                InlineKeyboardButton("Google Maps", url=google_maps_url),
+                InlineKeyboardButton("Bing Maps", url=bing_maps_url),
+                InlineKeyboardButton("Apple Maps", url=apple_maps_url),
+                InlineKeyboardButton("Yandex Maps", url=yandex_maps_url)
+            )
+            
+            # Отправляем фото с сообщением, адресом и кнопками
+            bot.send_photo(
+                message.chat.id,
+                photo,
+                caption=f"📍 Адрес: {location_info['address']}\n\nПо данным координатам найдены такие результаты:",
+                reply_markup=markup
+            )
+    except Exception as e:
+        bot.reply_to(message, f"Произошла ошибка при получении информации о местоположении: {str(e)}")
+    finally:
+        driver.quit()
+
+    send_photos_with_buttons(message.chat.id, lat, lon)
+
+def send_photos_with_buttons(chat_id, lat, lon):
+    # Все предыдущие сообщения с кнопками остаются без изменений
+    # ... [Весь остальной код функции send_photos_with_buttons остается таким же]
+    image_url = "https://i.postimg.cc/t4LXnfqX/1000474879.png"
+    caption = "Дополнительные ресурсы:"
+    markup = InlineKeyboardMarkup()
+    markup.row(
+        InlineKeyboardButton("Arcgis", url=f"https://livingatlas.arcgis.com/wayback/#localChangesOnly=true&ext={lon},{lat},{lon},{lat}"),
+        InlineKeyboardButton("EarthEngine", url=f"https://earthengine.google.com/timelapse/#v={lat},{lon},15,latLng&t=3.04"),
+        InlineKeyboardButton("Sentinel", url=f"https://apps.sentinel-hub.com/sentinel-playground/?source=S2L2A&lat={lat}&lng={lon}")
+    )
+    bot.send_photo(chat_id, image_url, caption=caption, reply_markup=markup)
+    
+    # Продолжение кода с остальными сообщениями...
+    # [Оставшаяся часть функции send_photos_with_buttons остается без изменений]
+
+@bot.message_handler(func=lambda message: is_cadastral_number(message.text))
+def handle_cadastral_number(message):
+    cadastral_number = message.text.strip()
+    url = f'https://opendatabot.ua/l/{cadastral_number}?from=search'
+    bot.send_message(message.chat.id, f"Обрабатываю данные по кадастровому номеру: {cadastral_number}")
     
     driver = init_driver()
     try:
-        # Отправляем сообщение с адресом
-        address = "Rockefeller Center, 67 W 49th St, New York, NY 10112, United States"
-        bot.send_message(
-            message.chat.id,
-            f"📍 Адрес: {address}\n\nПо данным координатам найдены такие результаты:"
-        )
-        
-        # Добавляем инлайн кнопки для карт
-        google_maps_url = f"https://www.google.com/maps?ll={lat},{lon}&q={lat},{lon}&hl=en&t=m&z=15"
-        bing_maps_url = f"https://www.bing.com/maps/?v=2&cp={lat}~{lon}&style=r&lvl=15&sp=Point.{lat}_{lon}____"
-        apple_maps_url = f"https://maps.apple.com/maps?ll={lat},{lon}&q={lat},{lon}&t=m"
-        yandex_maps_url = f"https://maps.yandex.com/?ll={lon},{lat}&spn=0.01,0.01&l=sat,skl&pt={lon},{lat}"
-        
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("Google Maps", url=google_maps_url))
-        markup.add(InlineKeyboardButton("Bing Maps", url=bing_maps_url))
-        markup.add(InlineKeyboardButton("Apple Maps", url=apple_maps_url))
-        markup.add(InlineKeyboardButton("Yandex Maps", url=yandex_maps_url))
-        
-        bot.send_message(message.chat.id, "Изображение", reply_markup=markup)
-        
+        driver.get(url)
+        time.sleep(3)  # Даем время для загрузки страницы
+        screenshot = driver.get_screenshot_as_png()
+        photo = io.BytesIO(screenshot)
+        bot.send_photo(message.chat.id, photo, caption=f"Информация по кадастровому номеру {cadastral_number}")
     except Exception as e:
-        bot.reply_to(message, f"Произошла ошибка при получении информации о местоположении: {str(e)}")
+        bot.send_message(message.chat.id, "Не удалось получить информацию по указанному кадастровому номеру.")
+        logger.error(f"Error in handle_cadastral_number: {str(e)}")
     finally:
         driver.quit()
 

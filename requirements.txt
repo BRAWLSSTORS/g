@@ -5,3 +5,5 @@ idna
 urllib3
 requests
 pytelegrambotapi
+selenium
+webdriver-manager

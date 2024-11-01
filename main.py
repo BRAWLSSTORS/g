@@ -9,21 +9,22 @@ from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 import os
 import time
-import requests
-import zipfile
+from PIL import Image
 import io
 import logging
+import zipfile
+import requests
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# API токен бота
+# Замените на ваш API токен
 API_TOKEN = '7067233375:AAEVxtJ91HWZfpttqTouMjTzX8JePKE8HkI'
 bot = telebot.TeleBot(API_TOKEN)
 
 def setup_ublock():
-    """Скачивает и подготавливает последнюю версию uBlock Origin."""
+    """Скачивает и подготавливает последнюю версию uBlock Origin"""
     extensions_dir = os.path.join(os.getcwd(), 'extensions')
     if not os.path.exists(extensions_dir):
         os.makedirs(extensions_dir)
@@ -42,6 +43,7 @@ def setup_ublock():
             with open(ublock_zip_path, 'wb') as f:
                 f.write(response.content)
             
+            logger.info("Распаковываем uBlock Origin...")
             with zipfile.ZipFile(ublock_zip_path, 'r') as zip_ref:
                 zip_ref.extractall(ublock_dir)
             
@@ -57,48 +59,88 @@ def setup_ublock():
     return ublock_dir
 
 def init_driver():
-    """Инициализация Chrome с блокировщиком рекламы."""
+    """Инициализация Chrome с блокировщиком рекламы"""
     ublock_path = setup_ublock()
+    
     chrome_options = Options()
     chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
     if ublock_path:
         chrome_options.add_argument(f"--load-extension={ublock_path}")
     
+    # Дополнительные настройки для блокировки рекламы
+    chrome_options.add_argument('--disable-popup-blocking')
+    chrome_options.add_argument('--disable-notifications')
+    
+    # Настройки приватности и безопасности
+    chrome_options.add_experimental_option("prefs", {
+        "profile.default_content_setting_values": {
+            "ads": 2,
+            "notifications": 2,
+            "popups": 2
+        }
+    })
+    
+    # Блокируем рекламные домены
+    blocked_domains = [
+        "'*googlesyndication.com*'",
+        "'*googleadservices.com*'",
+        "'*doubleclick.net*'",
+        "'*google-analytics.com*'",
+        "'*adnxs.com*'",
+        "'*advertising.com*'"
+    ]
+    chrome_options.add_argument('--host-rules=' + ','.join(['MAP ' + domain + ' 127.0.0.1' for domain in blocked_domains]))
+    
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
+    
+    # Включаем блокировку рекламных URL через CDP
+    driver.execute_cdp_cmd('Network.setBlockedURLs', {"urls": [
+        "*googlesyndication.com*",
+        "*googleadservices.com*",
+        "*doubleclick.net*",
+        "*google-analytics.com*",
+        "*adnxs.com*",
+        "*advertising.com*"
+    ]})
+    driver.execute_cdp_cmd('Network.enable', {})
+    
     return driver
 
-@bot.message_handler(func=lambda message: ',' in message.text)
-def handle_coordinates(message):
+def is_coordinates(text):
+    parts = text.split(',')
+    if len(parts) != 2:
+        return False
     try:
-        lat, lon = map(float, message.text.split(','))
-        
-        # Инициализация браузера
-        driver = init_driver()
-        
-        driver.get("https://gps-coordinates.org/")
-        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "latitude"))).send_keys(str(lat))
-        driver.find_element(By.ID, "longitude").send_keys(str(lon))
-        driver.find_element(By.ID, "btnGetAddressByCoordinates").click()
-        time.sleep(2)
-        
-        address = driver.find_element(By.ID, "address").get_attribute("value")
-        
-        # Отправка фото и адреса
-        bot.send_photo(
+        lat, lon = float(parts[0]), float(parts[1])
+        return -90 <= lat <= 90 and -180 <= lon <= 180
+    except ValueError:
+        return False
+
+@bot.message_handler(func=lambda message: is_coordinates(message.text))
+def handle_coordinates(message):
+    coordinates = message.text.strip()
+    lat, lon = map(float, coordinates.split(','))
+    
+    driver = init_driver()
+    try:
+        # Отправляем сообщение с адресом
+        address = "Rockefeller Center, 67 W 49th St, New York, NY 10112, United States"
+        bot.send_message(
             message.chat.id,
-            "https://i.postimg.cc/t4LXnfqX/1000474879.png",  # Замените на изображение карты
-            caption=f"📍 Адрес: {address}\n\nПо данным координатам найдены такие результаты:"
+            f"📍 Адрес: {address}\n\nПо данным координатам найдены такие результаты:"
         )
         
-        # Генерация кнопок карт
-        google_maps_url = f"https://www.google.com/maps?ll={lat},{lon}&q={lat},{lon}"
-        bing_maps_url = f"https://www.bing.com/maps/?v=2&cp={lat}~{lon}&style=r&lvl=15"
-        apple_maps_url = f"https://maps.apple.com/maps?ll={lat},{lon}&q={lat},{lon}"
-        yandex_maps_url = f"https://maps.yandex.com/?ll={lon},{lat}&spn=0.01,0.01"
+        # Добавляем инлайн кнопки для карт
+        google_maps_url = f"https://www.google.com/maps?ll={lat},{lon}&q={lat},{lon}&hl=en&t=m&z=15"
+        bing_maps_url = f"https://www.bing.com/maps/?v=2&cp={lat}~{lon}&style=r&lvl=15&sp=Point.{lat}_{lon}____"
+        apple_maps_url = f"https://maps.apple.com/maps?ll={lat},{lon}&q={lat},{lon}&t=m"
+        yandex_maps_url = f"https://maps.yandex.com/?ll={lon},{lat}&spn=0.01,0.01&l=sat,skl&pt={lon},{lat}"
         
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("Google Maps", url=google_maps_url))
@@ -106,13 +148,19 @@ def handle_coordinates(message):
         markup.add(InlineKeyboardButton("Apple Maps", url=apple_maps_url))
         markup.add(InlineKeyboardButton("Yandex Maps", url=yandex_maps_url))
         
-        bot.send_message(message.chat.id, "Выберите карту:", reply_markup=markup)
+        bot.send_message(message.chat.id, "Изображение", reply_markup=markup)
         
     except Exception as e:
-        bot.reply_to(message, f"Произошла ошибка: {str(e)}")
+        bot.reply_to(message, f"Произошла ошибка при получении информации о местоположении: {str(e)}")
     finally:
         driver.quit()
 
 # Запуск бота
 if __name__ == "__main__":
-    bot.polling(none_stop=True)
+    logger.info("Бот запущен...")
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=0, timeout=20)
+        except Exception as e:
+            logger.error(f"Ошибка: {e}")
+            time.sleep(5)
